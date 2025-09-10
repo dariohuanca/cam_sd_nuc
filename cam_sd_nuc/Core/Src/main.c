@@ -23,6 +23,13 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
+#include "vc0706_hal.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -32,6 +39,29 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+#define VC0706_READ_CHUNK 64
+
+#define LINK_UART_HANDLE  huart5          // <--- change to your UART handle (huart3, huart7, etc.)
+#define SEND_FILENAME     "im5.JPG"
+
+/* ------------------------ */
+
+#define CHUNK          64u              // multiple of 512 recommended
+#define SOF0           0x55
+#define SOF1           0xAA
+#define ACK            0x06
+#define NAK            0x15
+#define UART_TMO_MS    2500
+#define MAX_RETRY      8
+
+static vc0706_t cam;
+extern UART_HandleTypeDef LINK_UART_HANDLE;
+
+
+void myprintf(const char *fmt, ...);
+static int generar_nombre_unico(char *out, size_t out_sz);
+char filename[40];
 
 /* USER CODE END PD */
 
@@ -51,6 +81,340 @@ UART_HandleTypeDef huart3;
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
+
+int camera_init(void) {
+    myprintf("\r\ninicializando camara...\r\n");
+
+    // Bind to USART2 at 38400 (will HAL_UART_Init with that baud if needed)
+    if (!vc0706_begin(&cam, &huart2, 38400)) {
+        myprintf("no se detecto la camara o error de comunicacion\r\n");
+        return -1;
+    }
+
+    // Version probe (good connectivity test)
+    char *ver = vc0706_get_version(&cam);
+    if (!ver) {
+        myprintf("get_version fallo\r\n");
+        return -2;
+    }
+    // The buffer is NUL-terminated; print a trimmed line
+    myprintf("version: %s\r\n", ver);
+
+    // Set resolution 640x480 (same as cam.setImageSize(VC0706_640x480))
+    if (!vc0706_set_image_size(&cam, VC0706_640x480)) {
+        myprintf("no se pudo fijar resolucion 640x480\r\n");
+        return -3;
+    }
+    // Read back to confirm
+    uint8_t sz = vc0706_get_image_size(&cam);
+    if (sz != VC0706_640x480) {
+        myprintf("aviso: resolucion leida = 0x%02X (esperado 0x00)\r\n", sz);
+    } else {
+        myprintf("resolucion establecida a 640x480\r\n");
+    }
+
+    // (Opcional) ajustar compresion JPEG: 0x00 (max calidad) .. 0xFF (max compresion)
+    // (void)vc0706_set_compression(&cam, 0x36);
+
+    myprintf("camara lista\r\n");
+    return 0;
+}
+
+
+void myprintf(const char *fmt, ...) {
+  static char buffer[256];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+
+  int len = strlen(buffer);
+  HAL_UART_Transmit(&huart4, (uint8_t*)buffer, len, -1);
+
+}
+
+
+/* ===== CRC16-CCITT (poly 0x1021, init 0xFFFF) ===== */
+static uint16_t crc16_ccitt(const uint8_t *data, uint32_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (uint32_t i = 0; i < len; i++) {
+        crc ^= ((uint16_t)data[i]) << 8;
+        for (uint8_t b = 0; b < 8; b++) {
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+        }
+    }
+    return crc;
+}
+
+/* ===== UART helpers (blocking) ===== */
+static int uart_send(const void *p, uint16_t n)
+{
+    return (HAL_UART_Transmit(&LINK_UART_HANDLE, (uint8_t*)p, n, HAL_MAX_DELAY) == HAL_OK) ? 0 : -1;
+}
+static int uart_recv(void *p, uint16_t n, uint32_t tmo)
+{
+    return (HAL_UART_Receive(&LINK_UART_HANDLE, (uint8_t*)p, n, tmo) == HAL_OK) ? 0 : -1;
+}
+
+/* ===== Protocol: header + framed data ===== */
+static int send_header(uint32_t fsz)
+{
+    uint8_t hdr[6] = { 'S','Z', (uint8_t)(fsz), (uint8_t)(fsz>>8), (uint8_t)(fsz>>16), (uint8_t)(fsz>>24) };
+    if (uart_send(hdr, sizeof(hdr)) != 0) return -1;
+
+    uint8_t ack = 0;
+    if (uart_recv(&ack, 1, UART_TMO_MS) != 0) return -2;
+    return (ack == ACK) ? 0 : -3;
+}
+
+static int send_frame(uint16_t seq, const uint8_t *data, uint16_t len)
+{
+	myprintf("Enviando x4 \r\n");
+    static uint8_t tx[CHUNK + 8]; // SOF(2) + seq(2) + len(2) + payload + crc(2)
+    tx[0] = SOF0; tx[1] = SOF1;
+    tx[2] = (uint8_t)(seq); tx[3] = (uint8_t)(seq >> 8);
+    tx[4] = (uint8_t)(len); tx[5] = (uint8_t)(len >> 8);
+    memcpy(&tx[6], data, len);
+    uint16_t crc = crc16_ccitt(data, len);
+    tx[6 + len]     = (uint8_t)(crc);
+    tx[6 + len + 1] = (uint8_t)(crc >> 8);
+
+    for (int attempt = 0; attempt < MAX_RETRY; attempt++) {
+        if (uart_send(tx, (uint16_t)(len + 8)) != 0) return -10;
+
+        uint8_t resp[3];
+        if (uart_recv(resp, 3, UART_TMO_MS) == 0 && resp[0] == ACK) {
+            uint16_t seq_echo = (uint16_t)resp[1] | ((uint16_t)resp[2] << 8);
+            if (seq_echo == seq) return 0;
+        }
+        // retry on timeout or NAK
+    }
+    return -11;
+}
+
+/* ===== Public API: send a file ===== */
+int send_file_over_uart(const char *path)
+{
+    FRESULT fr;
+    FATFS fs;
+    FIL   f;
+    UINT  br;
+    static uint8_t buf[CHUNK];
+
+    // Ensure FatFs is wired to SPI SD in your project
+    MX_FATFS_Init();
+    fr = f_mount(&fs, "", 1);
+    if (fr != FR_OK) return -100;
+    myprintf("Enviando x2 \r\n");
+
+    fr = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
+    if (fr != FR_OK) { f_mount(NULL, "", 0); return -101; }
+
+    uint32_t fsz = (uint32_t)f_size(&f);
+    if (send_header(fsz) != 0) { f_close(&f); f_mount(NULL, "", 0); return -102; }
+
+    uint16_t seq = 0;
+    uint32_t sent = 0;
+
+    while (sent < fsz) {
+    	myprintf("Enviando x3 \r\n");
+
+        UINT need = (fsz - sent > CHUNK) ? CHUNK : (UINT)(fsz - sent);
+        fr = f_read(&f, buf, need, &br);
+        if (fr != FR_OK) { f_close(&f); f_mount(NULL, "", 0); return -103; }
+        if (br == 0) break;
+
+        if (send_frame(seq, buf, (uint16_t)br) != 0) { f_close(&f); f_mount(NULL, "", 0); return -104; }
+        sent += br;
+        seq++;
+    }
+
+    f_close(&f);
+    f_mount(NULL, "", 0);
+    return 0;
+}
+
+/* ===== Button-driven send (polling) =====
+ * Requires USER button as input (e.g., Nucleo B1 on PC13).
+ */
+static volatile bool g_sending  = false;
+static bool btn_prev = true; // idle-high on many Nucleo boards
+
+static bool button_pressed_edge(void)
+{
+    bool now = (HAL_GPIO_ReadPin(USER_Btn_GPIO_Port, USER_Btn_Pin) == GPIO_PIN_RESET);
+    bool pressed = (btn_prev && !now); // high -> low
+    btn_prev = now;
+    return pressed;
+}
+
+
+
+
+
+/* ================== END F446ZE SENDER ================== */
+
+
+
+/* fixed date like your sketch; swap for RTC later */
+static void fecha_yyyymmdd(char *dst) { strcpy(dst, "20250101"); }
+
+/* IMG_YYYYMMDD_NNNNNN.JPG with FatFS existence check */
+static int generar_nombre_unico(char *out, size_t out_sz) {
+    if (!out || out_sz < 32) return -1;
+    char ymd[9]; fecha_yyyymmdd(ymd);
+    FILINFO fno;
+    for (unsigned i = 0; i < 1000000U; i++) {
+        int n = snprintf(out, out_sz, "IMG_%s_%06u.JPG", ymd, i);
+        if (n <= 0 || (size_t)n >= out_sz) return -2;
+        FRESULT fr = f_stat(out, &fno);
+        if (fr == FR_NO_FILE) return 0;      // available
+        if (fr != FR_OK && fr != FR_EXIST) return -3;
+    }
+    return -4;
+}
+
+/* capture using manual loop (no sink), 64-byte chunks */
+int capturar_imagen_a_sd_manual(vc0706_t *cam) {
+    if (!cam) return -1;
+
+    FATFS fs; FIL file; FRESULT fr; UINT bw;
+
+    MX_FATFS_Init();
+    fr = f_mount(&fs, "", 1);
+    if (fr != FR_OK) { myprintf("f_mount=%d\r\n", fr); return -100; }
+
+    if (!vc0706_take_picture(cam)) {
+        myprintf("take_picture FAIL\r\n");
+        f_mount(NULL, "", 0);
+        return -200;
+    }
+
+    uint32_t jpglen = vc0706_frame_length(cam);
+    if (jpglen == 0) {
+        myprintf("frame_length=0\r\n");
+        (void)vc0706_resume_video(cam);
+        f_mount(NULL, "", 0);
+        return -201;
+    }
+    myprintf("size=%lu bytes\r\n", (unsigned long)jpglen);
+
+    //char filename[40];
+    int rc = generar_nombre_unico(filename, sizeof(filename));
+    if (rc != 0) {
+        myprintf("name err=%d\r\n", rc);
+        (void)vc0706_resume_video(cam);
+        f_mount(NULL, "", 0);
+        return -202;
+    }
+
+
+    fr = f_open(&file, filename, FA_WRITE | FA_CREATE_NEW);
+    if (fr != FR_OK) {
+        myprintf("f_open=%d\r\n", fr);
+        (void)vc0706_resume_video(cam);
+        f_mount(NULL, "", 0);
+        return -203;
+    }
+    myprintf("writing %s ...\r\n", filename);
+
+    uint32_t written = 0;
+    int payload_offset = -1; // will be 0 or 5 after first chunk
+
+    while (written < jpglen) {
+        uint32_t remain = jpglen - written;
+        uint8_t n = (remain < VC0706_READ_CHUNK ) ? (uint8_t)remain : (uint8_t)VC0706_READ_CHUNK ;
+        if (n > 240) n = 240;  // safety: VC0706 count is uint8_t
+
+        uint8_t *buf = vc0706_read_picture(cam, n, 500);   // returns [5-byte header] + n data
+
+        if (!buf) {
+            myprintf("read_picture timeout/null\r\n");
+            f_close(&file);
+            (void)vc0706_resume_video(cam);
+            f_mount(NULL, "", 0);
+            return -204;
+        }
+        if (payload_offset < 0) {
+            if (buf[0] == 0xFF && buf[1] == 0xD8) {
+                // Looks like JPEG SOI at start => payload already at buf
+                payload_offset = 0;
+            } else if (buf[0] == 0x76 && buf[2] == 0x32) {
+                // 0x76, serial, 0x32 (= READ_FBUF reply) => header present
+                payload_offset = 5;
+            } else {
+                // fallback: if looks like header length >= 5, assume 5; else assume 0
+                payload_offset = 5;
+            }
+        }
+
+        /* write ONLY JPEG payload; skip 5-byte VC0706 header */
+        fr = f_write(&file, buf + payload_offset, n, &bw);
+        if (fr != FR_OK || bw != n) {
+            myprintf("f_write err=%d bw=%u n=%u\r\n", fr, (unsigned)bw, (unsigned)n);
+            f_close(&file);
+            (void)vc0706_resume_video(cam);
+            f_mount(NULL, "", 0);
+            return -205;
+        }
+
+        written += n;
+        if ((written % (10*1024)) < VC0706_READ_CHUNK ) myprintf(".");
+    }
+    myprintf("\r\n");
+
+    f_sync(&file);
+    f_close(&file);
+    (void)vc0706_resume_video(cam);
+    f_mount(NULL, "", 0);
+
+    myprintf("done: %s (%lu bytes)\r\n", filename, (unsigned long)written);
+    return 0;
+}
+
+void user_loop_sender_sd(void)
+{
+    if (!g_sending && button_pressed_edge()) {
+    	myprintf("Enviando \r\n");
+        g_sending = true;
+        (void)send_file_over_uart(filename);
+        g_sending = false;
+    }
+}
+
+void user_loop_sender_cam_sd(void)
+{
+    if (!g_sending && button_pressed_edge()) {
+        g_sending = true;
+
+        char filename[40];
+        if (generar_nombre_unico(filename, sizeof(filename)) != 0) {
+            myprintf("name gen failed\r\n");
+            g_sending = false;
+            return;
+        }
+
+        myprintf("Capturando y guardando: %s\r\n", filename);
+        int rc = capturar_imagen_a_sd_manual(&cam);
+        if (rc != 0) {
+            myprintf("capture/save failed rc=%d\r\n", rc);
+            g_sending = false;
+            return;
+        }
+        g_sending = false;
+        myprintf("Enviando por UART: %s\r\n", filename);
+        while(1){
+        	user_loop_sender_sd();
+        }
+
+
+    }
+}
+
+
+
+
 
 /* USER CODE END PV */
 
@@ -109,6 +473,50 @@ int main(void)
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
 
+  myprintf("\r\n~ SD card demo by kiwih ~\r\n\r\n");
+
+  HAL_Delay(2000); //a short delay is important to let the SD card settle
+
+  //some variables for FatFs
+  FATFS FatFs; 	//Fatfs handle
+  FIL fil; 		//File handle
+  FRESULT fres; //Result after operations
+
+  //Open the file system
+  fres = f_mount(&FatFs, "", 1); //1=mount now
+  if (fres != FR_OK) {
+	myprintf("f_mount error (%i)\r\n", fres);
+	while(1);
+  }
+
+  //Let's get some statistics from the SD card
+  DWORD free_clusters, free_sectors, total_sectors;
+
+  FATFS* getFreeFs;
+
+  fres = f_getfree("", &free_clusters, &getFreeFs);
+  if (fres != FR_OK) {
+	myprintf("f_getfree error (%i)\r\n", fres);
+	while(1);
+  }
+
+  //Formula comes from ChaN's documentation
+  total_sectors = (getFreeFs->n_fatent - 2) * getFreeFs->csize;
+  free_sectors = free_clusters * getFreeFs->csize;
+
+  myprintf("SD card stats:\r\n%10lu KiB total drive space.\r\n%10lu KiB available.\r\n", total_sectors / 2, free_sectors / 2);
+  HAL_Delay(1000);
+
+  int rc = camera_init();
+  HAL_Delay(1000);
+  if (rc != 0) {
+      myprintf("camera_init failed (%d)\r\n", rc);
+      // opcional: parpadear LED o quedarse en loop de error
+      // while (1) { HAL_Delay(250); }
+  } else {
+      myprintf("camera ok\r\n");
+  }
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -118,6 +526,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  user_loop_sender_cam_sd();
   }
   /* USER CODE END 3 */
 }
@@ -288,7 +697,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 38400;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
