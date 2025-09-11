@@ -55,6 +55,8 @@
 #define UART_TMO_MS    2500
 #define MAX_RETRY      8
 
+#define UART_TX_TMO_MS  2500
+
 static vc0706_t cam;
 extern UART_HandleTypeDef LINK_UART_HANDLE;
 
@@ -150,7 +152,7 @@ static uint16_t crc16_ccitt(const uint8_t *data, uint32_t len)
 /* ===== UART helpers (blocking) ===== */
 static int uart_send(const void *p, uint16_t n)
 {
-    return (HAL_UART_Transmit(&LINK_UART_HANDLE, (uint8_t*)p, n, HAL_MAX_DELAY) == HAL_OK) ? 0 : -1;
+    return (HAL_UART_Transmit(&LINK_UART_HANDLE, (uint8_t*)p, n, UART_TX_TMO_MS) == HAL_OK) ? 0 : -1;
 }
 static int uart_recv(void *p, uint16_t n, uint32_t tmo)
 {
@@ -161,10 +163,14 @@ static int uart_recv(void *p, uint16_t n, uint32_t tmo)
 static int send_header(uint32_t fsz)
 {
     uint8_t hdr[6] = { 'S','Z', (uint8_t)(fsz), (uint8_t)(fsz>>8), (uint8_t)(fsz>>16), (uint8_t)(fsz>>24) };
+
+
     if (uart_send(hdr, sizeof(hdr)) != 0) return -1;
+    myprintf("[TX] uart_send end\r\n");
 
     uint8_t ack = 0;
     if (uart_recv(&ack, 1, UART_TMO_MS) != 0) return -2;
+    myprintf("[TX] header_ok\r\n");
     return (ack == ACK) ? 0 : -3;
 }
 
@@ -182,6 +188,11 @@ static int send_frame(uint16_t seq, const uint8_t *data, uint16_t len)
 
     for (int attempt = 0; attempt < MAX_RETRY; attempt++) {
         if (uart_send(tx, (uint16_t)(len + 8)) != 0) return -10;
+
+        uint8_t dump;
+        while (HAL_UART_Receive(&LINK_UART_HANDLE, &dump, 1, 0) == HAL_OK) {
+            /* discard */
+        }
 
         uint8_t resp[3];
         if (uart_recv(resp, 3, UART_TMO_MS) == 0 && resp[0] == ACK) {
@@ -206,25 +217,31 @@ int send_file_over_uart(const char *path)
     MX_FATFS_Init();
     fr = f_mount(&fs, "", 1);
     if (fr != FR_OK) return -100;
-    myprintf("Enviando x2 \r\n");
+
 
     fr = f_open(&f, path, FA_READ | FA_OPEN_EXISTING);
     if (fr != FR_OK) { f_mount(NULL, "", 0); return -101; }
 
     uint32_t fsz = (uint32_t)f_size(&f);
+    myprintf("[TX] uart_send(len=%u) begin\r\n", (unsigned)(br + 8));
     if (send_header(fsz) != 0) { f_close(&f); f_mount(NULL, "", 0); return -102; }
+
 
     uint16_t seq = 0;
     uint32_t sent = 0;
+    myprintf("Enviando x2 \r\n");
 
     while (sent < fsz) {
     	myprintf("Enviando x3 \r\n");
 
         UINT need = (fsz - sent > CHUNK) ? CHUNK : (UINT)(fsz - sent);
         fr = f_read(&f, buf, need, &br);
+        myprintf("[TX] f_read fr=%d br=%u need=%u\r\n", (int)fr, (unsigned)br, (unsigned)need);
+        if (fr != FR_OK || br == 0) { myprintf("[TX] f_read_fail\r\n"); return -105; }
         if (fr != FR_OK) { f_close(&f); f_mount(NULL, "", 0); return -103; }
         if (br == 0) break;
 
+        myprintf("[TX] send_frame seq=%u len=%u\r\n", (unsigned)seq, (unsigned)br);
         if (send_frame(seq, buf, (uint16_t)br) != 0) { f_close(&f); f_mount(NULL, "", 0); return -104; }
         sent += br;
         seq++;
@@ -275,7 +292,6 @@ static int generar_nombre_unico(char *out, size_t out_sz) {
     return -4;
 }
 
-/* capture using manual loop (no sink), 64-byte chunks */
 int capturar_imagen_a_sd_manual(vc0706_t *cam) {
     if (!cam) return -1;
 
@@ -378,7 +394,7 @@ void user_loop_sender_sd(void)
     if (!g_sending && button_pressed_edge()) {
     	myprintf("Enviando \r\n");
         g_sending = true;
-        (void)send_file_over_uart(filename);
+        (void)send_file_over_uart(SEND_FILENAME);
         g_sending = false;
     }
 }
@@ -526,7 +542,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  user_loop_sender_cam_sd();
+	  //user_loop_sender_cam_sd();
+	  user_loop_sender_sd();
   }
   /* USER CODE END 3 */
 }
