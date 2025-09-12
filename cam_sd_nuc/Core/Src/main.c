@@ -47,7 +47,7 @@
 
 /* ------------------------ */
 
-#define CHUNK          64u              // multiple of 512 recommended
+#define CHUNK          256u              // multiple of 512 recommended
 #define SOF0           0x55
 #define SOF1           0xAA
 #define ACK            0x06
@@ -170,7 +170,9 @@ static int send_header(uint32_t fsz)
 
     uint8_t ack = 0;
     if (uart_recv(&ack, 1, UART_TMO_MS) != 0) return -2;
+    //myprintf("uart ack = %d \r\n; ");
     myprintf("[TX] header_ok\r\n");
+    myprintf("El ACK es 0x%02X\r\n", (unsigned)ack);   // Hex con cero a la izquierda
     return (ack == ACK) ? 0 : -3;
 }
 
@@ -223,7 +225,7 @@ int send_file_over_uart(const char *path)
     if (fr != FR_OK) { f_mount(NULL, "", 0); return -101; }
 
     uint32_t fsz = (uint32_t)f_size(&f);
-    myprintf("[TX] uart_send(len=%u) begin\r\n", (unsigned)(br + 8));
+    //myprintf("[TX] uart_send(len=%u) begin\r\n", (unsigned)(br + 8));
     if (send_header(fsz) != 0) { f_close(&f); f_mount(NULL, "", 0); return -102; }
 
 
@@ -236,12 +238,12 @@ int send_file_over_uart(const char *path)
 
         UINT need = (fsz - sent > CHUNK) ? CHUNK : (UINT)(fsz - sent);
         fr = f_read(&f, buf, need, &br);
-        myprintf("[TX] f_read fr=%d br=%u need=%u\r\n", (int)fr, (unsigned)br, (unsigned)need);
-        if (fr != FR_OK || br == 0) { myprintf("[TX] f_read_fail\r\n"); return -105; }
+        //myprintf("[TX] f_read fr=%d br=%u need=%u\r\n", (int)fr, (unsigned)br, (unsigned)need);
+        //if (fr != FR_OK || br == 0) { myprintf("[TX] f_read_fail\r\n"); return -105; }
         if (fr != FR_OK) { f_close(&f); f_mount(NULL, "", 0); return -103; }
         if (br == 0) break;
 
-        myprintf("[TX] send_frame seq=%u len=%u\r\n", (unsigned)seq, (unsigned)br);
+        //myprintf("[TX] send_frame seq=%u len=%u\r\n", (unsigned)seq, (unsigned)br);
         if (send_frame(seq, buf, (uint16_t)br) != 0) { f_close(&f); f_mount(NULL, "", 0); return -104; }
         sent += br;
         seq++;
@@ -681,7 +683,7 @@ static void MX_UART5_Init(void)
 
   /* USER CODE END UART5_Init 1 */
   huart5.Instance = UART5;
-  huart5.Init.BaudRate = 1200;
+  huart5.Init.BaudRate = 4800;
   huart5.Init.WordLength = UART_WORDLENGTH_8B;
   huart5.Init.StopBits = UART_STOPBITS_1;
   huart5.Init.Parity = UART_PARITY_NONE;
