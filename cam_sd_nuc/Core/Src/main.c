@@ -401,6 +401,22 @@ void user_loop_sender_sd(void)
     }
 }
 
+
+
+void user_loop_sender_uart(int status,bool status16, bool status32)
+{
+    //if (!g_sending && button_pressed_edge()) {
+    if (status==1 && status16==true && status32==true) {
+    	myprintf("Enviando \r\n");
+        g_sending = true;
+        (void)send_file_over_uart(SEND_FILENAME);
+        g_sending = false;
+    }else{
+    	myprintf("Comando mal recibido \n");
+    }
+}
+
+
 void user_loop_sender_cam_sd(void)
 {
     if (!g_sending && button_pressed_edge()) {
@@ -420,15 +436,52 @@ void user_loop_sender_cam_sd(void)
             g_sending = false;
             return;
         }
-        g_sending = false;
+
         myprintf("Enviando por UART: %s\r\n", filename);
-        while(1){
-        	user_loop_sender_sd();
-        }
+
+        HAL_Delay(500);
+        (void)send_file_over_uart(filename);
+        g_sending = false;
+
 
 
     }
 }
+
+
+
+
+/* **************************************** Programacion de comandos ********************************************/
+
+/************************************************
+ Declaracion de cabeceras, payload y variables
+ ************************************************/
+
+uint8_t TA; /*TA=TargetAddress (Address del Payload)*/
+uint8_t SA; /*SA=SourceAddress (Address del OBC)*/
+
+/*PPID=PayloadProtocolID
+(Define las funciones
+ Toma de foto camara 1: id=0x01
+ Toma de foto camara 2: id=0x02)*/
+uint8_t PPID;
+
+/*PS=PayloadSize (Tamaño del payload)
+ PayloadComando= 1-2bytes
+ PayloadData= 1-255bytes*/
+uint8_t PS;
+
+/*Payload*/
+uint8_t payload_total[255];
+uint8_t payload_envio[]={};
+
+/*CRC32*/
+uint32_t CRC32;
+
+/*Variable*/
+uint8_t count;
+uint8_t val;
+
 
 
 
@@ -535,6 +588,99 @@ int main(void)
       myprintf("camera ok\r\n");
   }
 
+  //************************************* Recibiendo comando *************************************************************
+  //Armado de Protocolo |TA|SA|PPID|PS|CRC16_0|CRC16_1|Payload[0]|CRC32_0|CRC32_1|CRC32_2|CRC32_3|
+  //**********************************************************************************************************************
+
+  myprintf("Recibiendo comando ... \n");
+  HAL_StatusTypeDef status_rec = HAL_UART_Receive(&LINK_UART_HANDLE,cab,11,2500);
+  myprintf("Comando Recibido \n");
+  HAL_UART_Transmit(&huart4,cab,11,2500);// Sending in normal mode
+
+  //Verificar si logro recibir el comando
+  /*Estado comando*/
+  int status;
+
+  if(status_rec==HAL_OK){
+	status=1;
+  }else{
+	status=0;
+  }
+  myprintf("Status %d \n",status);
+
+  //****************** Verificacion CRC16
+  uint8_t cabecera[4]={cab[0],cab[1],cab[2],cab[3]};
+
+  //Algoritmo para la generación del CRC16 de la cabecera invertida
+  uint16_t G_X = 0x1021; // Polynomial generator
+  uint16_t CRC16 = 0xFFFF;
+
+  for(int i=0; i<sizeof(cabecera)/sizeof(cabecera[0]); i++){
+  	  CRC16 ^= (uint16_t)(cabecera[i]<<8);
+
+  	  for (int i=0; i<8; i++){
+  		  if ((CRC16 & 0x8000) != 0){
+  			  CRC16 = (uint16_t)((CRC16 <<1)^G_X);
+  		  }else{
+  			  CRC16 <<=1;
+  		  }
+  	  }
+  }
+
+  // El CRC16 de 0x8805 = 0xC294
+  // El CRC16 de 0x88050101 = 0x901B
+  // El CRC16 de 0x8080A011 (0x88050101 invertido) = 0x7DCC
+  uint8_t CRC16_0 = (uint8_t)(CRC16 & 0x00FF);
+  uint8_t CRC16_1 = (uint8_t)((CRC16 >> 8)& 0x00FF);
+
+  bool status_crc16;
+  if(CRC16_0==cab[4] && CRC16_1==cab[5]){
+	  status_crc16= true;
+	  myprintf("El CRC16 se recibio correctamente ... \n");
+	  myprintf("%02X %02X\n",cab[4],cab[5]);
+  }else{
+	  status_crc16= false;
+	  myprintf("El CRC16 no esta correcto ... \n");
+	  myprintf("%02X %02X\n",cab[4],cab[5]);
+  }
+
+  //********************** Verificacion CRC32
+  uint8_t payload_cabecera[7]={cab[0],cab[1],cab[2],cab[3],cab[4],cab[5],cab[6]};
+
+  //Algoritmo para la generación del CRC32 de la cabecera invertida
+  uint32_t G_Y = 0x04C11DB7; // Polynomial generator
+  uint32_t CRC32 = 0xFFFFFFFF;
+
+  for(int j=0; j<sizeof(payload_cabecera)/sizeof(payload_cabecera[0]); j++){
+  	  CRC32 ^= (uint32_t)(payload_cabecera[j]<<24);
+
+  	  for (int j=0; j<8; j++){
+  		  if ((CRC32 & 0x80000000) != 0){
+  			  CRC32 = (uint32_t)((CRC32 <<1)^G_Y);
+  		  }else{
+  			  CRC32 <<=1;
+  		  }
+  	  }
+  }
+
+  uint8_t CRC32_byte3 = (uint8_t)((CRC32 >> 24) & 0xFF);//MSB
+  uint8_t CRC32_byte2 = (uint8_t)((CRC32 >> 16) & 0xFF);
+  uint8_t CRC32_byte1 = (uint8_t)((CRC32 >> 8) & 0xFF);
+  uint8_t CRC32_byte0 = (uint8_t)(CRC32 & 0xFF);//LSB
+
+  bool status_crc32;
+  if(CRC32_byte0==cab[7] && CRC32_byte1==cab[8] && CRC32_byte2==cab[9] && CRC32_byte3==cab[10]){
+	  status_crc32= true;
+	  myprintf("El CRC32 se recibio correctamente ... \n");
+	  myprintf("%02X %02X %02X %02X\n",cab[7],cab[8],cab[9],cab[10]);
+  }else{
+	  status_crc32= false;
+	  myprintf("El CRC32 no esta correcto ... \n");
+	  myprintf("%02X %02X %02X %02X\n",cab[7],cab[8],cab[9],cab[10]);
+  }
+
+
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -545,7 +691,9 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 	  //user_loop_sender_cam_sd();
-	  user_loop_sender_sd();
+	  //user_loop_sender_sd();
+	  user_loop_sender_uart(status,status_crc16,status_crc32);
+
   }
   /* USER CODE END 3 */
 }
@@ -683,7 +831,7 @@ static void MX_UART5_Init(void)
 
   /* USER CODE END UART5_Init 1 */
   huart5.Instance = UART5;
-  huart5.Init.BaudRate = 4800;
+  huart5.Init.BaudRate = 2400;
   huart5.Init.WordLength = UART_WORDLENGTH_8B;
   huart5.Init.StopBits = UART_STOPBITS_1;
   huart5.Init.Parity = UART_PARITY_NONE;
