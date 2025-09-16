@@ -483,6 +483,161 @@ uint8_t count;
 uint8_t val;
 
 
+/****************************************
+ * Funciones generan CRC16 y CRC32
+ ***************************************/
+
+bool gener_crc16(uint8_t *cabecera,uint8_t size_cabecera,uint8_t *cab){
+
+		    uint16_t G_X = 0x1021; // Polynomial generator
+		    uint16_t CRC16 = 0xFFFF;
+		    uint8_t InvArreglo[4] = {};
+		    uint8_t Temp;
+		    uint8_t InvBits[4] ={}; //Arreglo de bits invertidos de la cabecera  (LSB first)
+		    uint8_t Fin=0x00;
+
+		    //Se invierten los elementos del array
+		    for(int i=0; i<size_cabecera; i++){
+		    	InvArreglo[i]=cabecera[size_cabecera-i-1];
+		    }
+
+		    //Se invierten los bits de los elementos del array
+		    for(int j=0; j<size_cabecera;j++){
+		    	for(int i=0; i<8; i++){
+		    		Temp=InvArreglo[j]&(0x80);
+		    		//InvBits[0]=InvArreglo[1];
+		    		//HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+		    		//HAL_Delay(1000);
+		    		if(Temp!=0x00){
+		    			Fin=(Fin>>1);
+		    			Fin=Fin|(0x80);
+		    			InvArreglo[j]=(InvArreglo[j]<<1);
+		    			// InvBits[0]=Fin;
+		    			// HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+		    			// HAL_Delay(1000);
+		    		}else{
+		    			Fin=(Fin>>1);
+		    			InvArreglo[j]=(InvArreglo[j]<<1);
+		    			//InvBits[0]=InvArreglo[0];
+		    			//HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+		    			//HAL_Delay(1000);
+		    		}
+		    	}
+		    	InvBits[j]=Fin;
+		    	Fin=0x00;
+		    }
+
+		    //Algoritmo para la generación del CRC16 de la cabecera invertida
+		    for(int i=0; i<sizeof(InvBits)/sizeof(InvBits[0]); i++){
+		    	  CRC16 ^= (uint16_t)(InvBits[i]<<8);
+
+		    	  for (int i=0; i<8; i++){
+		    		  if ((CRC16 & 0x8000) != 0){
+		    			  CRC16 = (uint16_t)((CRC16 <<1)^G_X);
+		    		  }else{
+		    			  CRC16 <<=1;
+		    		  }
+		    	  }
+		    }
+
+		    // El CRC16 de 0x8805 = 0xC294
+		    // El CRC16 de 0x88050101 = 0x901B
+		    // El CRC16 de 0x8080A011 (0x88050101 invertido) = 0x7DCC
+		    uint8_t CRC16_0 = (uint8_t)(CRC16 & 0x00FF);
+		    uint8_t CRC16_1 = (uint8_t)((CRC16 >> 8)& 0x00FF);
+
+		    bool status_crc16;
+		    if(CRC16_0==cab[4] && CRC16_1==cab[5]){
+		  	  status_crc16= true;
+		  	  myprintf("El CRC16 se recibio correctamente ... \n");
+		  	  myprintf("%02X %02X\n",cab[4],cab[5]);
+		  	  return status_crc16;
+		    }else{
+		  	  status_crc16= false;
+		  	  myprintf("El CRC16 no esta correcto ... \n");
+		  	  myprintf("%02X %02X\n",cab[4],cab[5]);
+		  	  return status_crc16;
+		    }
+}
+
+
+bool gener_crc32(uint8_t *payload_cabecera,uint8_t size_cabecera,uint8_t *cab){
+
+			//Algoritmo para la generación del CRC32 de la cabecera invertida
+		    uint32_t G_Y = 0x04C11DB7; // Polynomial generator
+		    uint32_t CRC32 = 0xFFFFFFFF;
+		    uint8_t InvArreglo2[7] = {};
+		    uint8_t Temp2;
+		    uint8_t Fin2=0x00;
+		    uint8_t InvBits2[7] ={};
+
+		    //Se invierten los elementos del array
+		    //Frame actual: 0x01 0xCC 0x7D 0x01 0x01 0x05 0x88
+		    for(int i=0; i<size_cabecera; i++){
+		    	InvArreglo2[i]=payload_cabecera[size_cabecera-i-1];
+		    }
+
+		    //Se invierten los bits de los elementos del array
+		    //Frame LBS: 0x80 0x33 0xBE 0x80 0x80 0xA0 0x11
+		    for(int j=0; j<size_cabecera;j++){
+		    	for(int i=0; i<8; i++){
+		    		Temp2=InvArreglo2[j]&(0x80);
+		    		//InvBits3[0]=InvArreglo2[j];
+		    		//HAL_UART_Transmit(&huart2,InvBits3,sizeof(InvBits3),100);// Sending in normal mode
+		    		//HAL_Delay(1000);
+		    		if(Temp2!=0x00){
+		    			Fin2=(Fin2>>1);
+		    			Fin2=Fin2|(0x80);
+		    			InvArreglo2[j]=(InvArreglo2[j]<<1);
+		    			//InvBits3[0]=Fin2;
+		    			//HAL_UART_Transmit(&huart2,InvBits3,sizeof(InvBits3),100);// Sending in normal mode
+		    			//HAL_Delay(1000);
+		    		}else{
+		    			Fin2=(Fin2>>1);
+		    			InvArreglo2[j]=(InvArreglo2[j]<<1);
+		    			//InvBits[0]=InvArreglo[0];
+		    			//HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+		    			//HAL_Delay(1000);
+		    		}
+		    	}
+		    	InvBits2[j]=Fin2;
+		    	Fin2=0x00;
+		    }
+
+		    for(int j=0; j<sizeof(InvBits2)/sizeof(InvBits2[0]); j++){
+		    	CRC32 ^= (uint32_t)(InvBits2[j]<<24);
+
+		    	  for (int j=0; j<8; j++){
+		    		  if ((CRC32 & 0x80000000) != 0){
+		    			  CRC32 = (uint32_t)((CRC32 <<1)^G_Y);
+		    		  }else{
+		    			  CRC32 <<=1;
+		    		  }
+		    	  }
+		    }
+
+		    uint8_t CRC32_byte3 = (uint8_t)((CRC32 >> 24) & 0xFF);//MSB
+		    uint8_t CRC32_byte2 = (uint8_t)((CRC32 >> 16) & 0xFF);
+		    uint8_t CRC32_byte1 = (uint8_t)((CRC32 >> 8) & 0xFF);
+		    uint8_t CRC32_byte0 = (uint8_t)(CRC32 & 0xFF);//LSB
+
+		    bool status_crc32;
+
+		    myprintf(" los crc32 son %02X %02X %02X %02X\n",CRC32_byte0,CRC32_byte1,CRC32_byte2,CRC32_byte3);
+		    if(CRC32_byte0==cab[7] && CRC32_byte1==cab[8] && CRC32_byte2==cab[9] && CRC32_byte3==cab[10]){
+		  	  status_crc32= true;
+		  	  myprintf("El CRC32 se recibio correctamente ... \n");
+		  	  myprintf("%02X %02X %02X %02X\n",cab[7],cab[8],cab[9],cab[10]);
+		  	  return status_crc32;
+		    }else{
+		  	  status_crc32= false;
+		  	  myprintf("El CRC32 no esta correcto ... \n");
+		  	  myprintf("%02X %02X %02X %02X\n",cab[7],cab[8],cab[9],cab[10]);
+		  	  return status_crc32;
+		    }
+}
+
+/*******************************************************************************************************************/
 
 
 
@@ -588,96 +743,9 @@ int main(void)
       myprintf("camera ok\r\n");
   }
 
-  //************************************* Recibiendo comando *************************************************************
-  //Armado de Protocolo |TA|SA|PPID|PS|CRC16_0|CRC16_1|Payload[0]|CRC32_0|CRC32_1|CRC32_2|CRC32_3|
-  //**********************************************************************************************************************
+  uint8_t cab[]={};
 
-  myprintf("Recibiendo comando ... \n");
-  HAL_StatusTypeDef status_rec = HAL_UART_Receive(&LINK_UART_HANDLE,cab,11,2500);
-  myprintf("Comando Recibido \n");
-  HAL_UART_Transmit(&huart4,cab,11,2500);// Sending in normal mode
 
-  //Verificar si logro recibir el comando
-  /*Estado comando*/
-  int status;
-
-  if(status_rec==HAL_OK){
-	status=1;
-  }else{
-	status=0;
-  }
-  myprintf("Status %d \n",status);
-
-  //****************** Verificacion CRC16
-  uint8_t cabecera[4]={cab[0],cab[1],cab[2],cab[3]};
-
-  //Algoritmo para la generación del CRC16 de la cabecera invertida
-  uint16_t G_X = 0x1021; // Polynomial generator
-  uint16_t CRC16 = 0xFFFF;
-
-  for(int i=0; i<sizeof(cabecera)/sizeof(cabecera[0]); i++){
-  	  CRC16 ^= (uint16_t)(cabecera[i]<<8);
-
-  	  for (int i=0; i<8; i++){
-  		  if ((CRC16 & 0x8000) != 0){
-  			  CRC16 = (uint16_t)((CRC16 <<1)^G_X);
-  		  }else{
-  			  CRC16 <<=1;
-  		  }
-  	  }
-  }
-
-  // El CRC16 de 0x8805 = 0xC294
-  // El CRC16 de 0x88050101 = 0x901B
-  // El CRC16 de 0x8080A011 (0x88050101 invertido) = 0x7DCC
-  uint8_t CRC16_0 = (uint8_t)(CRC16 & 0x00FF);
-  uint8_t CRC16_1 = (uint8_t)((CRC16 >> 8)& 0x00FF);
-
-  bool status_crc16;
-  if(CRC16_0==cab[4] && CRC16_1==cab[5]){
-	  status_crc16= true;
-	  myprintf("El CRC16 se recibio correctamente ... \n");
-	  myprintf("%02X %02X\n",cab[4],cab[5]);
-  }else{
-	  status_crc16= false;
-	  myprintf("El CRC16 no esta correcto ... \n");
-	  myprintf("%02X %02X\n",cab[4],cab[5]);
-  }
-
-  //********************** Verificacion CRC32
-  uint8_t payload_cabecera[7]={cab[0],cab[1],cab[2],cab[3],cab[4],cab[5],cab[6]};
-
-  //Algoritmo para la generación del CRC32 de la cabecera invertida
-  uint32_t G_Y = 0x04C11DB7; // Polynomial generator
-  uint32_t CRC32 = 0xFFFFFFFF;
-
-  for(int j=0; j<sizeof(payload_cabecera)/sizeof(payload_cabecera[0]); j++){
-  	  CRC32 ^= (uint32_t)(payload_cabecera[j]<<24);
-
-  	  for (int j=0; j<8; j++){
-  		  if ((CRC32 & 0x80000000) != 0){
-  			  CRC32 = (uint32_t)((CRC32 <<1)^G_Y);
-  		  }else{
-  			  CRC32 <<=1;
-  		  }
-  	  }
-  }
-
-  uint8_t CRC32_byte3 = (uint8_t)((CRC32 >> 24) & 0xFF);//MSB
-  uint8_t CRC32_byte2 = (uint8_t)((CRC32 >> 16) & 0xFF);
-  uint8_t CRC32_byte1 = (uint8_t)((CRC32 >> 8) & 0xFF);
-  uint8_t CRC32_byte0 = (uint8_t)(CRC32 & 0xFF);//LSB
-
-  bool status_crc32;
-  if(CRC32_byte0==cab[7] && CRC32_byte1==cab[8] && CRC32_byte2==cab[9] && CRC32_byte3==cab[10]){
-	  status_crc32= true;
-	  myprintf("El CRC32 se recibio correctamente ... \n");
-	  myprintf("%02X %02X %02X %02X\n",cab[7],cab[8],cab[9],cab[10]);
-  }else{
-	  status_crc32= false;
-	  myprintf("El CRC32 no esta correcto ... \n");
-	  myprintf("%02X %02X %02X %02X\n",cab[7],cab[8],cab[9],cab[10]);
-  }
 
 
 
@@ -690,9 +758,52 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  //************************************* Recibiendo comando *************************************************************
+	  //Armado de Protocolo |TA|SA|PPID|PS|CRC16_0|CRC16_1|Payload[0]|CRC32_0|CRC32_1|CRC32_2|CRC32_3|
+	  //**********************************************************************************************************************
+
+	    myprintf("Esperando comando ... \n");
+	    HAL_StatusTypeDef status_rec = HAL_UART_Receive(&LINK_UART_HANDLE,cab,11,2500);
+
+	    //Verificar si logro recibir el comando
+	    /*Estado comando*/
+	    int status;
+
+	    if(status_rec==HAL_OK){
+	    	status=1;
+	    	myprintf("Comando Recibido \n");
+	    	myprintf("%11X \n",cab);
+	    	myprintf("Status %d \n",status);
+		    uint8_t cabecera[4] = {cab[0],cab[1],cab[2],cab[3]};
+		    uint8_t size_cabecera = sizeof(cabecera)/sizeof(cabecera[0]);
+
+		    bool status_crc16= gener_crc16(cabecera,size_cabecera,cab);
+		    //********************** Verificacion CRC32
+		    uint8_t payload_cabecera[7] = {cab[0],cab[1],cab[2],cab[3],cab[5],cab[4],cab[6]};
+		    uint8_t size_payload_cabe = sizeof(payload_cabecera)/sizeof(payload_cabecera[0]);
+		    myprintf("entrando al crc32 x1... \n");
+			bool status_crc32 = gener_crc32(payload_cabecera,size_payload_cabe,cab);
+			HAL_Delay(100);
+			break;
+
+	    }else{
+	    	status=0;
+	    	myprintf("Status %d \n",status);
+	    	myprintf("Comando no recibido\n");
+	    }
+
+        // Reconocer el payload : lee foto desde la SD del payload y lo envia al OBC}
+
+	    //****************** Verificacion CRC16
+
+
+	    /* USER CODE END WHILE */
+
+		//user_loop_sender(status,status_crc16,status_crc32);
+
 	  //user_loop_sender_cam_sd();
 	  //user_loop_sender_sd();
-	  user_loop_sender_uart(status,status_crc16,status_crc32);
+	  //user_loop_sender_uart(status,status_crc16,status_crc32);
 
   }
   /* USER CODE END 3 */
@@ -798,14 +909,14 @@ static void MX_UART4_Init(void)
 
   /* USER CODE END UART4_Init 1 */
   huart4.Instance = UART4;
-  huart4.Init.BaudRate = 1200;
+  huart4.Init.BaudRate = 9600;
   huart4.Init.WordLength = UART_WORDLENGTH_8B;
   huart4.Init.StopBits = UART_STOPBITS_1;
   huart4.Init.Parity = UART_PARITY_NONE;
   huart4.Init.Mode = UART_MODE_TX_RX;
   huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart4.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart4) != HAL_OK)
+  if (HAL_HalfDuplex_Init(&huart4) != HAL_OK)
   {
     Error_Handler();
   }
