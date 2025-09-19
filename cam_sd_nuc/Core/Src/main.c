@@ -873,6 +873,62 @@ uint32_t gener_crc32_rx (uint8_t TA,uint8_t SA,uint8_t PPID,uint8_t PS,uint8_t C
 
 /*******************************************************************************************************************/
 
+unit8_t recibir_comando(void){
+	int a =1
+	while (a==1)
+	{
+
+		  //************************************* Recibiendo comando *************************************************************
+		  //Armado de Protocolo |TA|SA|PPID|PS|CRC16_0|CRC16_1|Payload[0]|CRC32_0|CRC32_1|CRC32_2|CRC32_3|
+		  //**********************************************************************************************************************
+
+		    myprintf("Esperando comando ... \n");
+		    HAL_StatusTypeDef status_rec = HAL_UART_Receive(&LINK_UART_HANDLE,cab,11,2500);
+
+		    //Verificar si logro recibir el comando
+
+		    //int status;
+
+		    if(status_rec==HAL_OK){
+		    	//status=1;
+		    	myprintf("Comando Recibido \n");
+		    	HAL_UART_Transmit(&huart4,cab,11,2500);
+		    	//myprintf("%11X \n",cab);
+		    	myprintf("Status %d \n",status);
+			    uint8_t cabecera[4] = {cab[0],cab[1],cab[2],cab[3]};
+			    uint8_t size_cabecera = sizeof(cabecera)/sizeof(cabecera[0]);
+
+			    bool status_crc16= gener_crc16(cabecera,size_cabecera,cab);
+			    //********************** Verificacion CRC32
+			    uint8_t payload_cabecera[7] = {cab[0],cab[1],cab[2],cab[3],cab[5],cab[4],cab[6]};
+			    uint8_t size_payload_cabe = sizeof(payload_cabecera)/sizeof(payload_cabecera[0]);
+			    //myprintf("entrando al crc32 x1... \n");
+				bool status_crc32 = gener_crc32(payload_cabecera,size_payload_cabe,cab);
+				if (status_crc16 == 1 && status_crc32 ==1 ){
+
+				}
+				HAL_Delay(100);
+
+
+
+				break;
+
+		    }else{
+		    	//status=0;
+		    	//myprintf("Status %d \n",status);
+		    	myprintf("Comando no recibido\n");
+		    }
+		}
+}
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1027,6 +1083,7 @@ int main(void)
 
 
 
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -1124,11 +1181,6 @@ int main(void)
 			HAL_UART_Transmit(&huart4,payload_total[0],1,2500);
 			myprintf("\r\n %d \r\n\r\n",payload_envio[0]);
 			myprintf("\r\n %d \r\n\r\n",sizeof(payload_envio)/sizeof(payload_envio[0]));
-
-
-
-
-
 
 
 
