@@ -457,19 +457,19 @@ void envia_defrente(void)
 
 	char filename[40];
 	if (generar_nombre_unico(filename, sizeof(filename)) != 0) {
-		//myprintf("name gen failed\r\n");
+		myprintf("name gen failed\r\n");
 		return;
 	}
 
-	//myprintf("Capturando y guardando: %s\r\n", filename);
+	myprintf("Capturando y guardando: %s\r\n", filename);
 	int rc = capturar_imagen_a_sd_manual(&cam);
 	if (rc != 0) {
-		//myprintf("capture/save failed rc=%d\r\n", rc);
+		myprintf("capture/save failed rc=%d\r\n", rc);
 		return;
 	}
 
 
-	HAL_Delay(500);
+	HAL_Delay(2000);
 	(void)send_file_over_uart(filename);
 
 }
@@ -678,6 +678,7 @@ bool gener_crc32(uint8_t *payload_cabecera,uint8_t size_cabecera,uint8_t *cab){
 		    }else{
 		  	  status_crc32= false;
 		  	  myprintf("El CRC32 no esta correcto ... \n");
+		  	  myprintf("%02X ..\n",cab[7]);
 		  	  myprintf("%02X %02X %02X %02X\n",cab[7],cab[8],cab[9],cab[10]);
 		  	  return status_crc32;
 		    }
@@ -849,8 +850,10 @@ uint32_t gener_crc32_rx (uint8_t TA,uint8_t SA,uint8_t PPID,uint8_t PS,uint8_t C
 
 /*******************************************************************************************************************/
 
-unit8_t recibir_comando(void){
+uint8_t recibir_comando(void){
 	int a =1;
+	uint8_t cab[11]={};
+	uint8_t comando;
 	while (a==1)
 	{
 
@@ -861,6 +864,10 @@ unit8_t recibir_comando(void){
 		    myprintf("Esperando comando ... \n");
 		    HAL_StatusTypeDef status_rec = HAL_UART_Receive(&LINK_UART_HANDLE,cab,11,2500);
 
+		    //myprintf("\r\n MicroSD inicializo BIEN \r\n\r\n");
+		    //HAL_UART_Transmit(&huart4,cab,11,2500);
+		    myprintf("%02X ..\n",cab[7]);
+
 		    //Verificar si logro recibir el comando
 
 		    //int status;
@@ -870,7 +877,7 @@ unit8_t recibir_comando(void){
 		    	myprintf("Comando Recibido \n");
 		    	HAL_UART_Transmit(&huart4,cab,11,2500);
 		    	//myprintf("%11X \n",cab);
-		    	myprintf("Status %d \n",status);
+		    	//myprintf("Status %d \n",status);
 			    uint8_t cabecera[4] = {cab[0],cab[1],cab[2],cab[3]};
 			    uint8_t size_cabecera = sizeof(cabecera)/sizeof(cabecera[0]);
 
@@ -885,6 +892,11 @@ unit8_t recibir_comando(void){
 					a=0;
 					break;
 				}
+				else {
+					comando =  0xFF;
+					a=0;
+					break;
+				}
 				HAL_Delay(100);
 
 
@@ -895,6 +907,7 @@ unit8_t recibir_comando(void){
 		    	//status=0;
 		    	//myprintf("Status %d \n",status);
 		    	myprintf("Comando no recibido\n");
+		    	comando = 0xFF;
 		    }
 		}
 		return comando;
@@ -915,37 +928,109 @@ void comando_recibido(uint8_t cab6){
   switch(cab6){
    case 0x01:
 	//payload_total[0]=0x01; /*TomaFotoSD*/
-	break;
+	   myprintf("Comando toma foto recibido\n");
+	   envia_defrente();
+
+	   enviar_comando(0X01);
+	   break;
    case 0x02:
 	//payload_total[0]=0x02; /*EnvíoFotoPaySTM32*/
-	break;
+	   myprintf("Comando toma enviar foto\n");
+	   (void)send_file_over_uart(SEND_FILENAME);
+	   enviar_comando(0X02);
+
+	   break;
    case 0x03:
+
 	//payload_total[0]=0x03; /*TomaFotoALmacYenviaPayload*/
-	envia_defrente();
-	break;
+	   enviar_comando(0X03);
+	   //envia_defrente();
+	   break;
    case 0x04:
 	//myprintf("\r\n MicroSD inicializo BIEN \r\n\r\n");
-    break;
+	   break;
    case 0x05:
 	//myprintf("\r\n MicroSD inicializo MAL \r\n\r\n");
-	break;
+	   break;
    case 0x06:
 	//myprintf("\r\n Camara inicializo BIEN \r\n\r\n");
-	break;
+	   break;
    case 0x07:
 	//myprintf("\r\n Camara inicializo MAL \r\n\r\n");
-	break;
+	   break;
+   case 0xFF:
+	   enviar_comando(0XFF);
+	   break;
    default:
-    myprintf("\r\n No entendi causha \r\n\r\n");
+	   enviar_comando(cab6);
+
   }
 
-}
-
-void enviar_comando(int indicador){
 
 }
 
-uint8_t comando_enviado(uint8_t PPID){
+void enviar_comando(uint8_t indicador){
+
+	//PPID=indicador; // halla el PPID del frame recibido
+
+	//payload_total[0] = comando_enviado(PPID); //Halla el payload_total con respecto al PPID
+
+	PPID=indicador;
+    // TODO: por ahiora etsa binem pero deben cambiar por el tema del payload
+	payload_total[0] = indicador;
+
+	for (int i=0; i<255; i++){
+	  val = payload_total[i] & 0b11111111;
+	  if (val != 0x00){
+		  count=count+1;
+	  }
+	}
+
+	//payload_envio[0] = payload_total[0];
+
+    //PS = countPay(payload_envio);
+	PS = count;
+	payload_envio[0] = payload_total[0];
+
+
+
+    /******************************
+    * Hallando el CRC16 y CRC32
+    ******************************/
+    uint16_t CRC16 = gener_crc16_rx(TA,SA,PPID,PS);
+
+    uint8_t CRC16_0 = (uint8_t)(CRC16 & 0x00FF);
+    uint8_t CRC16_1 = (uint8_t)((CRC16 >> 8)& 0x00FF);
+
+    uint32_t CRC32 = gener_crc32_rx(TA,SA,PPID,PS,CRC16_1,CRC16_0,payload_envio[0]);
+
+    uint8_t CRC32_byte3 = (uint8_t)((CRC32 >> 24) & 0xFF);//MSB
+    uint8_t CRC32_byte2 = (uint8_t)((CRC32 >> 16) & 0xFF);
+    uint8_t CRC32_byte1 = (uint8_t)((CRC32 >> 8) & 0xFF);
+    uint8_t CRC32_byte0 = (uint8_t)(CRC32 & 0xFF);//LSB
+
+    uint8_t resp[] = {TA,SA,PPID,PS,CRC16_0,CRC16_1,payload_envio[0],CRC32_byte0,CRC32_byte1,CRC32_byte2,CRC32_byte3};
+
+
+    HAL_Delay(5000);
+	//myprintf("Enviando comando ... \n");
+	//HAL_UART_Transmit(&huart4,resp,11,2500);
+	//myprintf("%X \n",resp);
+	//uint8_t cab[] = {CRC32_byte3,CRC32_byte2,CRC32_byte1,CRC32_byte0};
+    myprintf("\r\n ENVIANDO \r\n\r\n");
+	HAL_StatusTypeDef status_rec = HAL_UART_Transmit(&LINK_UART_HANDLE,resp,11,2500);// Sending in normal mode
+	myprintf("\r\n ENVIADO \r\n\r\n");
+	HAL_Delay(500);
+
+
+	//myprintf("\r\n  \r\n\r\n");
+	//HAL_UART_Transmit(&huart4,payload_total[0],1,2500);
+	//myprintf("\r\n %d \r\n\r\n",payload_envio[0]);
+	//myprintf("\r\n %d \r\n\r\n",sizeof(payload_envio)/sizeof(payload_envio[0]));
+
+}
+
+void comando_enviado(uint8_t PPID){
 	 /**********************************
 	   Definicion payload de respuesta
 	   Comando de foto en camara 1: 0x01
@@ -1048,7 +1133,7 @@ int main(void)
 
   }
   else {
-	  //envio sd mal
+	  myprintf("\r\n MICRO SD MAL  \r\n\r\n");
   }
 
   //Let's get some statistics from the SD card
@@ -1078,7 +1163,7 @@ int main(void)
   int rc = camera_init();
   HAL_Delay(1000);
   if (rc == 0) {
-	  myprintf("\r\n ta bien  \r\n\r\n");
+	  myprintf("\r\n CAMARA BIEN  \r\n\r\n");
       //myprintf("camera_init failed (%d)\r\n", rc);
       // opcional: parpadear LED o quedarse en loop de error
       // while (1) { HAL_Delay(250); }
@@ -1088,7 +1173,8 @@ int main(void)
 	  // envio camara mal
   }
 
-  uint8_t cab[]={};
+  //uint8_t cab[]={};
+  int estado = 1;
 
 
 
@@ -1104,120 +1190,14 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  //************************************* Recibiendo comando *************************************************************
-	  //Armado de Protocolo |TA|SA|PPID|PS|CRC16_0|CRC16_1|Payload[0]|CRC32_0|CRC32_1|CRC32_2|CRC32_3|
-	  //**********************************************************************************************************************
-
-	    myprintf("Esperando comando ... \n");
-	    HAL_StatusTypeDef status_rec = HAL_UART_Receive(&LINK_UART_HANDLE,cab,11,2500);
-
-	    //Verificar si logro recibir el comando
-
-	    int status;
-
-	    if(status_rec==HAL_OK){
-	    	status=1;
-	    	myprintf("Comando Recibido \n");
-	    	HAL_UART_Transmit(&huart4,cab,11,2500);
-	    	//myprintf("%11X \n",cab);
-	    	myprintf("Status %d \n",status);
-		    uint8_t cabecera[4] = {cab[0],cab[1],cab[2],cab[3]};
-		    uint8_t size_cabecera = sizeof(cabecera)/sizeof(cabecera[0]);
-
-		    bool status_crc16= gener_crc16(cabecera,size_cabecera,cab);
-		    //********************** Verificacion CRC32
-		    uint8_t payload_cabecera[7] = {cab[0],cab[1],cab[2],cab[3],cab[5],cab[4],cab[6]};
-		    uint8_t size_payload_cabe = sizeof(payload_cabecera)/sizeof(payload_cabecera[0]);
-		    myprintf("entrando al crc32 x1... \n");
-			bool status_crc32 = gener_crc32(payload_cabecera,size_payload_cabe,cab);
-			HAL_Delay(100);
+	  while (estado ==1){
+		  uint8_t comando = recibir_comando();
+		  HAL_Delay(100);
+		  comando_recibido(comando);
 
 
-		    /************************************************************
-		     * ***************Enviando Comando de respuesta
-		     * ******|05|88|01|01|0A|E7|02|2F|B4|47|F9
-		     ************************************************************/
-			PPID=cab[2]; // halla el PPID del frame recibido
+	  }
 
-			payload_total[0] = PayloadTotal(PPID); //Halla el payload_total con respecto al PPID
-
-			for (int i=0; i<255; i++){
-			  val = payload_total[i] & 0b11111111;
-			  if (val != 0x00){
-				  count=count+1;
-			  }
-			}
-
-			//payload_envio[0] = payload_total[0];
-
-	        //PS = countPay(payload_envio);
-			PS = count;
-			payload_envio[0] = payload_total[0];
-
-
-
-	        /******************************
-	        * Hallando el CRC16 y CRC32
-	        ******************************/
-	        uint16_t CRC16 = gener_crc16_rx(TA,SA,PPID,PS);
-
-	        uint8_t CRC16_0 = (uint8_t)(CRC16 & 0x00FF);
-	        uint8_t CRC16_1 = (uint8_t)((CRC16 >> 8)& 0x00FF);
-
-	        uint32_t CRC32 = gener_crc32_rx(TA,SA,PPID,PS,CRC16_1,CRC16_0,payload_envio[0]);
-
-	        uint8_t CRC32_byte3 = (uint8_t)((CRC32 >> 24) & 0xFF);//MSB
-	        uint8_t CRC32_byte2 = (uint8_t)((CRC32 >> 16) & 0xFF);
-	        uint8_t CRC32_byte1 = (uint8_t)((CRC32 >> 8) & 0xFF);
-	        uint8_t CRC32_byte0 = (uint8_t)(CRC32 & 0xFF);//LSB
-
-	        uint8_t resp[] = {TA,SA,PPID,PS,CRC16_0,CRC16_1,payload_envio[0],CRC32_byte0,CRC32_byte1,CRC32_byte2,CRC32_byte3};
-
-
-	        HAL_Delay(5000);
-			myprintf("Enviando comando ... \n");
-			HAL_UART_Transmit(&huart4,resp,11,2500);
-			//myprintf("%X \n",resp);
-			//uint8_t cab[] = {CRC32_byte3,CRC32_byte2,CRC32_byte1,CRC32_byte0};
-			HAL_StatusTypeDef status_rec = HAL_UART_Transmit(&LINK_UART_HANDLE,resp,11,2500);// Sending in normal mode
-			HAL_Delay(500);
-			if(status_rec==HAL_OK){
-				myprintf("Comando ENVAIDO \n");
-			}
-			else {
-				myprintf("tmreee \n");
-			}
-
-			myprintf("\r\n  \r\n\r\n");
-			HAL_UART_Transmit(&huart4,payload_total[0],1,2500);
-			myprintf("\r\n %d \r\n\r\n",payload_envio[0]);
-			myprintf("\r\n %d \r\n\r\n",sizeof(payload_envio)/sizeof(payload_envio[0]));
-
-
-
-			break;
-
-	    }else{
-	    	status=0;
-	    	myprintf("Status %d \n",status);
-	    	myprintf("Comando no recibido\n");
-	    }
-
-
-
-
-        // Reconocer el payload : lee foto desde la SD del payload y lo envia al OBC}
-
-	    //****************** Verificacion CRC16
-
-
-	    /* USER CODE END WHILE */
-
-		//user_loop_sender(status,status_crc16,status_crc32);
-
-	  //user_loop_sender_cam_sd();
-	  //user_loop_sender_sd();
-	  //user_loop_sender_uart(status,status_crc16,status_crc32);
 
   }
   /* USER CODE END 3 */
@@ -1330,7 +1310,7 @@ static void MX_UART4_Init(void)
   huart4.Init.Mode = UART_MODE_TX_RX;
   huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart4.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_HalfDuplex_Init(&huart4) != HAL_OK)
+  if (HAL_UART_Init(&huart4) != HAL_OK)
   {
     Error_Handler();
   }
