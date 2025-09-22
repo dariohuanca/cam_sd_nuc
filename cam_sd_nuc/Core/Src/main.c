@@ -512,31 +512,7 @@ uint8_t val;
 /**************************************
  * Generacion PS (payload size)
  ***************************************/
-uint8_t PayloadTotal(uint8_t PPID){
-	 /**********************************
-	   Definicion payload de respuesta
-	   Comando de foto en camara 1: 0x01
-	  **********************************/
-	  //uint8_t payload_total[255];
-	  uint8_t val_pay;
 
-	  switch(PPID){
-	   case 0x01:
-		val_pay=0x02; /*Rpta TomaFotoSD*/
-	  	break;
-	   case 0x02:
-		val_pay=0x04; /*Rpta EnvíoFotoPaySTM32*/
-	    break;
-	   case 0x03:
-		val_pay=0x06; /*Rpta TomaFotoALmacYenviaPayload*/
-	    break;
-	   default:
-		val_pay=0xFF;
-	  }
-
-	  //return payload_total;
-	  return val_pay;
-}
 
 uint8_t countPay(uint8_t* payload_envio){
 	/*Define la cantidad de bytes (size) del payload*/
@@ -874,7 +850,7 @@ uint32_t gener_crc32_rx (uint8_t TA,uint8_t SA,uint8_t PPID,uint8_t PS,uint8_t C
 /*******************************************************************************************************************/
 
 unit8_t recibir_comando(void){
-	int a =1
+	int a =1;
 	while (a==1)
 	{
 
@@ -905,7 +881,9 @@ unit8_t recibir_comando(void){
 			    //myprintf("entrando al crc32 x1... \n");
 				bool status_crc32 = gener_crc32(payload_cabecera,size_payload_cabe,cab);
 				if (status_crc16 == 1 && status_crc32 ==1 ){
-
+					comando =  cab[6];
+					a=0;
+					break;
 				}
 				HAL_Delay(100);
 
@@ -919,6 +897,7 @@ unit8_t recibir_comando(void){
 		    	myprintf("Comando no recibido\n");
 		    }
 		}
+		return comando;
 }
 
 
@@ -932,7 +911,7 @@ unit8_t recibir_comando(void){
 
 
 
-void recibido(uint8_t cab6){
+void comando_recibido(uint8_t cab6){
   switch(cab6){
    case 0x01:
 	//payload_total[0]=0x01; /*TomaFotoSD*/
@@ -961,6 +940,38 @@ void recibido(uint8_t cab6){
   }
 
 }
+
+void enviar_comando(int indicador){
+
+}
+
+uint8_t comando_enviado(uint8_t PPID){
+	 /**********************************
+	   Definicion payload de respuesta
+	   Comando de foto en camara 1: 0x01
+	  **********************************/
+	  //uint8_t payload_total[255];
+	  uint8_t val_pay;
+
+	  switch(PPID){
+	   case 0x01:
+		val_pay=0x02; /*Rpta TomaFotoSD*/
+	  	break;
+	   case 0x02:
+		val_pay=0x04; /*Rpta EnvíoFotoPaySTM32*/
+	    break;
+	   case 0x03:
+		val_pay=0x06; /*Rpta TomaFotoALmacYenviaPayload*/
+	    break;
+	   default:
+		val_pay=0xFF;
+	  }
+
+	  //return payload_total;
+	  return val_pay;
+}
+
+
 
 
 
