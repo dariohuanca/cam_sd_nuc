@@ -86,6 +86,17 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
 
+
+static inline void uart_flush_rx_polling(UART_HandleTypeDef *huart)
+{
+    uint8_t dump;
+    while (HAL_UART_Receive(huart, &dump, 1, 0) == HAL_OK) {
+        /* discard */
+    }
+    /* If an overrun happened, clear it so RX keeps working */
+    __HAL_UART_CLEAR_OREFLAG(huart);
+}
+
 int camera_init(void) {
     myprintf("\r\ninicializando camara...\r\n");
 
@@ -469,8 +480,8 @@ void envia_defrente(void)
 	}
 
 
-	HAL_Delay(2000);
-	(void)send_file_over_uart(filename);
+	//HAL_Delay(2000);
+	//(void)send_file_over_uart(filename);
 
 }
 
@@ -866,8 +877,11 @@ uint8_t recibir_comando(void){
 
 		    //myprintf("\r\n MicroSD inicializo BIEN \r\n\r\n");
 		    //HAL_UART_Transmit(&huart4,cab,11,2500);
-		    myprintf("%02X ..\n",cab[7]);
-
+		    //myprintf("%02X ..\n",cab[7]);
+		    myprintf("%02X %02X %02X %02X \n",cab[0],cab[1],cab[2],cab[3]);
+		    myprintf("%02X %02X %02X %02X \n",cab[4],cab[5],cab[6],cab[7]);
+		    myprintf("%02X %02X %02X  \n",cab[8],cab[9],cab[10]);
+		    myprintf("%02X ..\n",cab[6]);
 		    //Verificar si logro recibir el comando
 
 		    //int status;
@@ -936,7 +950,8 @@ void comando_recibido(uint8_t cab6){
    case 0x02:
 	//payload_total[0]=0x02; /*EnvíoFotoPaySTM32*/
 	   myprintf("Comando toma enviar foto\n");
-	   (void)send_file_over_uart(SEND_FILENAME);
+	   HAL_Delay(3000);
+	   (void)send_file_over_uart(filename);
 	   enviar_comando(0X02);
 
 	   break;
@@ -989,9 +1004,9 @@ void enviar_comando(uint8_t indicador){
 	//payload_envio[0] = payload_total[0];
 
     //PS = countPay(payload_envio);
-	PS = count;
+	//PS = count;
 	payload_envio[0] = payload_total[0];
-
+	PS = 0X01;
 
 
     /******************************
@@ -1011,8 +1026,11 @@ void enviar_comando(uint8_t indicador){
 
     uint8_t resp[] = {TA,SA,PPID,PS,CRC16_0,CRC16_1,payload_envio[0],CRC32_byte0,CRC32_byte1,CRC32_byte2,CRC32_byte3};
 
+    myprintf("%02X %02X %02X %02X \n",resp[0],resp[1],resp[2],resp[3]);
+    myprintf("%02X %02X %02X %02X \n",resp[4],resp[5],resp[6],resp[7]);
+    myprintf("%02X %02X %02X  \n",resp[8],resp[9],resp[10]);
 
-    HAL_Delay(5000);
+    HAL_Delay(500);
 	//myprintf("Enviando comando ... \n");
 	//HAL_UART_Transmit(&huart4,resp,11,2500);
 	//myprintf("%X \n",resp);
@@ -1021,7 +1039,7 @@ void enviar_comando(uint8_t indicador){
 	HAL_StatusTypeDef status_rec = HAL_UART_Transmit(&LINK_UART_HANDLE,resp,11,2500);// Sending in normal mode
 	myprintf("\r\n ENVIADO \r\n\r\n");
 	HAL_Delay(500);
-
+	count = 0;
 
 	//myprintf("\r\n  \r\n\r\n");
 	//HAL_UART_Transmit(&huart4,payload_total[0],1,2500);
@@ -1193,7 +1211,9 @@ int main(void)
 	  while (estado ==1){
 		  uint8_t comando = recibir_comando();
 		  HAL_Delay(100);
+		  uart_flush_rx_polling(&LINK_UART_HANDLE);
 		  comando_recibido(comando);
+
 
 
 	  }
