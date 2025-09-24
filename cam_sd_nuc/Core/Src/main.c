@@ -956,22 +956,20 @@ void comando_recibido(uint8_t cab6){
 
 	   break;
    case 0x03:
-
-	//payload_total[0]=0x03; /*TomaFotoALmacYenviaPayload*/
 	   enviar_comando(0X03);
 	   //envia_defrente();
 	   break;
-   case 0x04:
-	//myprintf("\r\n MicroSD inicializo BIEN \r\n\r\n");
-	   break;
    case 0x05:
-	//myprintf("\r\n MicroSD inicializo MAL \r\n\r\n");
+	   enviar_comando(0X05);
+	   break;
+   case 0x08:
+	   enviar_comando(0X08);
 	   break;
    case 0x06:
 	//myprintf("\r\n Camara inicializo BIEN \r\n\r\n");
 	   break;
-   case 0x07:
-	//myprintf("\r\n Camara inicializo MAL \r\n\r\n");
+   case 0x00:
+	   enviar_comando(0X00);
 	   break;
    case 0xFF:
 	   enviar_comando(0XFF);
@@ -1145,6 +1143,7 @@ int main(void)
   FRESULT fres; //Result after operations
 
   //Open the file system
+  /*
   fres = f_mount(&FatFs, "", 1); //1=mount now
   if (fres == FR_OK) {
 	  myprintf("\r\n ta bien  \r\n\r\n");
@@ -1153,6 +1152,7 @@ int main(void)
   else {
 	  myprintf("\r\n MICRO SD MAL  \r\n\r\n");
   }
+  */
 
   //Let's get some statistics from the SD card
 
@@ -1177,7 +1177,7 @@ int main(void)
 
   */
 
-
+  /*
   int rc = camera_init();
   HAL_Delay(1000);
   if (rc == 0) {
@@ -1190,9 +1190,13 @@ int main(void)
       //myprintf("camera ok\r\n");
 	  // envio camara mal
   }
+  */
 
   //uint8_t cab[]={};
-  int estado = 1;
+  int estado = 2;
+  int inicia = 0;
+  int inicia2 = 0;
+  int inicia3= 0;
 
 
 
@@ -1216,6 +1220,35 @@ int main(void)
 
 
 
+	  }
+	  while (estado ==2){
+		  fres = f_mount(&FatFs, "", 1); //1=mount now
+		  if (fres == FR_OK) {
+			  inicia = 3;
+
+		  }
+
+		  int rc = camera_init();
+		  HAL_Delay(1000);
+		  if (rc == 0) {
+			  inicia2 = 5;
+		  }
+		  inicia3 =  inicia + inicia2;
+
+		  if (inicia3 == 8){
+			  comando_recibido(0x08);
+		  }
+		  else if(inicia3 == 3){
+			  comando_recibido(0x03);
+		  }
+		  else if(inicia3 == 5){
+			  comando_recibido(0x05);
+		  }
+		  else{
+			  comando_recibido(0x00);
+		  }
+		  estado = 1;
+		  break;
 	  }
 
 
