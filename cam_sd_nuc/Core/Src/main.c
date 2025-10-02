@@ -43,7 +43,7 @@
 #define VC0706_READ_CHUNK 64
 
 #define LINK_UART_HANDLE  huart5          // <--- change to your UART handle (huart3, huart7, etc.)
-#define SEND_FILENAME     "im5.JPG"
+#define SEND_FILENAME     "im_pru.JPG"
 
 /* ------------------------ */
 
@@ -62,8 +62,10 @@ extern UART_HandleTypeDef LINK_UART_HANDLE;
 
 
 void myprintf(const char *fmt, ...);
-static int generar_nombre_unico(char *out, size_t out_sz);
-char filename[40];
+static int generar_nombre_unico(char *out, size_t out_sz,char *out2);
+char filename[40] = {};
+
+char filename_enviar[40] = {};
 
 uint8_t cab6;
 
@@ -181,6 +183,10 @@ static int send_header(uint32_t fsz)
     if (uart_send(hdr, sizeof(hdr)) != 0) return -1;
     myprintf("[TX] uart_send end\r\n");
 
+    //PRINTEO ENVIO
+    HAL_UART_Transmit(&huart3,hdr,sizeof(hdr),200);
+    //HAL_Delay(500);
+
     uint8_t ack = 0;
     if (uart_recv(&ack, 1, UART_TMO_MS) != 0) return -2;
     //myprintf("uart ack = %d \r\n; ");
@@ -191,7 +197,8 @@ static int send_header(uint32_t fsz)
 
 static int send_frame(uint16_t seq, const uint8_t *data, uint16_t len)
 {
-	myprintf("Enviando x4 \r\n");
+	//myprintf("Enviando x4 \r\n");
+	HAL_Delay(100);
     static uint8_t tx[CHUNK + 8]; // SOF(2) + seq(2) + len(2) + payload + crc(2)
     tx[0] = SOF0; tx[1] = SOF1;
     tx[2] = (uint8_t)(seq); tx[3] = (uint8_t)(seq >> 8);
@@ -203,6 +210,10 @@ static int send_frame(uint16_t seq, const uint8_t *data, uint16_t len)
 
     for (int attempt = 0; attempt < MAX_RETRY; attempt++) {
         if (uart_send(tx, (uint16_t)(len + 8)) != 0) return -10;
+
+        //PRINTEO ENVIO
+        HAL_UART_Transmit(&huart3,tx,sizeof(tx),200);
+        //HAL_Delay(500);
 
         uint8_t dump;
         while (HAL_UART_Receive(&LINK_UART_HANDLE, &dump, 1, 0) == HAL_OK) {
@@ -242,12 +253,14 @@ int send_file_over_uart(const char *path)
     if (send_header(fsz) != 0) { f_close(&f); f_mount(NULL, "", 0); return -102; }
 
 
+
     uint16_t seq = 0;
     uint32_t sent = 0;
     myprintf("Enviando x2 \r\n");
 
     while (sent < fsz) {
-    	myprintf("Enviando x3 \r\n");
+    	//myprintf("Enviando x3 \r\n");
+    	HAL_Delay(100);
 
         UINT need = (fsz - sent > CHUNK) ? CHUNK : (UINT)(fsz - sent);
         fr = f_read(&f, buf, need, &br);
@@ -293,6 +306,7 @@ static bool button_pressed_edge(void)
 static void fecha_yyyymmdd(char *dst) { strcpy(dst, "20250101"); }
 
 /* IMG_YYYYMMDD_NNNNNN.JPG with FatFS existence check */
+/*
 static int generar_nombre_unico(char *out, size_t out_sz) {
     if (!out || out_sz < 32) return -1;
     char ymd[9]; fecha_yyyymmdd(ymd);
@@ -306,7 +320,46 @@ static int generar_nombre_unico(char *out, size_t out_sz) {
     }
     return -4;
 }
+*/
 
+
+static int generar_nombre_unico(char *out, size_t out_sz,char *out2) {
+    if (!out || out_sz < 32) return -1;
+    char ymd[9]; fecha_yyyymmdd(ymd);
+    FATFS fs; FIL file; FRESULT fr; UINT bw;
+    //myprintf("inicializacion\r\n");
+    MX_FATFS_Init();
+    fr = f_mount(&fs, "", 1);
+    if (fr != FR_OK) { return -100; }
+    FILINFO fno;
+    for (unsigned i = 0; i < 1000000U; i++) {
+        int n = snprintf(out, out_sz, "IMG_%s_%06u.JPG", ymd, i);
+        //myprintf("n es %s ...\r\n", out);
+        if (n <= 0 || (size_t)n >= out_sz) return -2;
+        //myprintf("primer if \r\n");
+        FRESULT fr = f_stat(out, &fno);
+        //myprintf("fr es %d ...\r\n", fr);
+        //myprintf("n es %s ... x2\r\n", out);
+        //myprintf("nuevo es %s ... \r\n", out2);
+        if (fr == FR_NO_FILE){
+        	memcpy(out2, out,out_sz);
+        	//myprintf("nuevo es %s ... \r\n", out2);
+        	//myprintf("TODO BIEN ... \r\n");
+        	memset(out, 0, out_sz);
+        	return 0;
+        }
+        //myprintf("segundo if \r\n");// available
+        if (fr != FR_OK && fr != FR_EXIST) return -3;
+        //myprintf("tercero if \r\n");
+
+    }
+    return -4;
+}
+
+
+
+
+/*
 int capturar_imagen_a_sd_manual(vc0706_t *cam) {
     if (!cam) return -1;
 
@@ -380,7 +433,7 @@ int capturar_imagen_a_sd_manual(vc0706_t *cam) {
             }
         }
 
-        /* write ONLY JPEG payload; skip 5-byte VC0706 header */
+
         fr = f_write(&file, buf + payload_offset, n, &bw);
         if (fr != FR_OK || bw != n) {
             myprintf("f_write err=%d bw=%u n=%u\r\n", fr, (unsigned)bw, (unsigned)n);
@@ -403,6 +456,111 @@ int capturar_imagen_a_sd_manual(vc0706_t *cam) {
     myprintf("done: %s (%lu bytes)\r\n", filename, (unsigned long)written);
     return 0;
 }
+*/
+
+
+
+int capturar_imagen_a_sd_manual_filename(vc0706_t *cam,const char *filename) {
+    if (!cam) return -1;
+
+    FATFS fs; FIL file; FRESULT fr; UINT bw;
+    //myprintf("imagen sd filename\r\n");
+    MX_FATFS_Init();
+    fr = f_mount(&fs, "", 1);
+    if (fr != FR_OK) { return -100; }
+
+    if (!vc0706_take_picture(cam)) {
+        //myprintf("take_picture FAIL\r\n");
+        f_mount(NULL, "", 0);
+        return -200;
+    }
+
+    uint32_t jpglen = vc0706_frame_length(cam);
+    if (jpglen == 0) {
+        //myprintf("frame_length=0\r\n");
+        (void)vc0706_resume_video(cam);
+        f_mount(NULL, "", 0);
+        return -201;
+    }
+    //myprintf("size=%lu bytes\r\n", (unsigned long)jpglen);
+
+// FILENAME CHAR FILENAME
+    /*
+    int rc = generar_nombre_unico(filename, sizeof(filename));
+    if (rc != 0) {
+        //myprintf("name err=%d\r\n", rc);
+        (void)vc0706_resume_video(cam);
+        f_mount(NULL, "", 0);
+        return -202;
+    }
+    */
+
+
+    fr = f_open(&file, filename, FA_WRITE | FA_CREATE_NEW);
+    if (fr != FR_OK) {
+        //myprintf("f_open=%d\r\n", fr);
+        (void)vc0706_resume_video(cam);
+        f_mount(NULL, "", 0);
+        return -203;
+    }
+    //myprintf("writing %s ...\r\n", filename);
+
+    uint32_t written = 0;
+    int payload_offset = -1; // will be 0 or 5 after first chunk
+
+    while (written < jpglen) {
+    	//HAL_GPIO_TogglePin(WDG_GPIO_Port, WDG_Pin);
+        uint32_t remain = jpglen - written;
+        uint8_t n = (remain < VC0706_READ_CHUNK ) ? (uint8_t)remain : (uint8_t)VC0706_READ_CHUNK ;
+        if (n > 240) n = 240;  // safety: VC0706 count is uint8_t
+
+        uint8_t *buf = vc0706_read_picture(cam, n, 500);   // returns [5-byte header] + n data
+
+        if (!buf) {
+            //myprintf("read_picture timeout/null\r\n");
+            f_close(&file);
+            (void)vc0706_resume_video(cam);
+            f_mount(NULL, "", 0);
+            return -204;
+        }
+        if (payload_offset < 0) {
+            if (buf[0] == 0xFF && buf[1] == 0xD8) {
+                // Looks like JPEG SOI at start => payload already at buf
+                payload_offset = 0;
+            } else if (buf[0] == 0x76 && buf[2] == 0x32) {
+                // 0x76, serial, 0x32 (= READ_FBUF reply) => header present
+                payload_offset = 5;
+            } else {
+                // fallback: if looks like header length >= 5, assume 5; else assume 0
+                payload_offset = 5;
+            }
+        }
+
+        /* write ONLY JPEG payload; skip 5-byte VC0706 header */
+        fr = f_write(&file, buf + payload_offset, n, &bw);
+        if (fr != FR_OK || bw != n) {
+            //myprintf("f_write err=%d bw=%u n=%u\r\n", fr, (unsigned)bw, (unsigned)n);
+            f_close(&file);
+            (void)vc0706_resume_video(cam);
+            f_mount(NULL, "", 0);
+            return -205;
+        }
+
+        written += n;
+        //if ((written % (10*1024)) < VC0706_READ_CHUNK ) myprintf(".");
+    }
+    //myprintf("\r\n");
+
+    f_sync(&file);
+    f_close(&file);
+    //myprintf("termine\r\n");
+    (void)vc0706_resume_video(cam);
+    f_mount(NULL, "", 0);
+
+    //myprintf("done: %s (%lu bytes)\r\n", filename, (unsigned long)written);
+    return 0;
+}
+/*
 
 void user_loop_sender_sd(void)
 {
@@ -413,7 +571,9 @@ void user_loop_sender_sd(void)
         g_sending = false;
     }
 }
+*/
 
+/*
 
 
 void user_loop_sender_uart(int status,bool status16, bool status32)
@@ -428,7 +588,8 @@ void user_loop_sender_uart(int status,bool status16, bool status32)
     	myprintf("Comando mal recibido \n");
     }
 }
-
+*/
+/*
 
 void user_loop_sender_cam_sd(void)
 {
@@ -460,22 +621,26 @@ void user_loop_sender_cam_sd(void)
 
     }
 }
-
+*/
 
 void envia_defrente(void)
 {
 
+	//HAL_GPIO_TogglePin(WDG_GPIO_Port, WDG_Pin);
 
-	char filename[40];
-	if (generar_nombre_unico(filename, sizeof(filename)) != 0) {
-		myprintf("name gen failed\r\n");
+	//myprintf("El filename antes de es %s ... \r\n", filename);
+	//myprintf("estoy envia defrente\r\n");
+	if (generar_nombre_unico(filename, sizeof(filename), filename_enviar) != 0) {
+		//myprintf("name gen failed\r\n");
 		return;
 	}
-
-	myprintf("Capturando y guardando: %s\r\n", filename);
-	int rc = capturar_imagen_a_sd_manual(&cam);
+	//myprintf("Lo que entra es %s ... \r\n", filename_enviar);
+	//myprintf("El filename es %s ... \r\n", filename);
+	//myprintf("Capturando y guardando: %s\r\n", filename);
+	//capturar_imagen_a_sd_manual_filename
+	int rc = capturar_imagen_a_sd_manual_filename(&cam, filename_enviar);
 	if (rc != 0) {
-		myprintf("capture/save failed rc=%d\r\n", rc);
+		//myprintf("capture/save failed rc=%d\r\n", rc);
 		return;
 	}
 
@@ -484,6 +649,8 @@ void envia_defrente(void)
 	//(void)send_file_over_uart(filename);
 
 }
+
+
 
 
 
@@ -951,7 +1118,7 @@ void comando_recibido(uint8_t cab6){
 	//payload_total[0]=0x02; /*EnvíoFotoPaySTM32*/
 	   myprintf("Comando toma enviar foto\n");
 	   HAL_Delay(3000);
-	   (void)send_file_over_uart(filename);
+	   (void)send_file_over_uart(SEND_FILENAME);
 	   enviar_comando(0X02);
 
 	   break;
@@ -975,7 +1142,7 @@ void comando_recibido(uint8_t cab6){
 	   enviar_comando(0XFF);
 	   break;
    default:
-	   enviar_comando(cab6);
+	   enviar_comando(0XFF);
 
   }
 
@@ -1193,11 +1360,12 @@ int main(void)
   */
 
   //uint8_t cab[]={};
-  int estado = 2;
+  int estado = 0;
   int inicia = 0;
   int inicia2 = 0;
   int inicia3= 0;
-
+  int bandera = 1;
+  uint8_t comando = 0x00;
 
 
 
@@ -1212,6 +1380,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  /*
 	  while (estado ==1){
 		  uint8_t comando = recibir_comando();
 		  HAL_Delay(100);
@@ -1250,6 +1419,100 @@ int main(void)
 		  estado = 1;
 		  break;
 	  }
+	  */
+
+	  while (estado == 0){
+		  //HAL_GPIO_TogglePin(WDG_GPIO_Port, WDG_Pin);
+		  comando = recibir_comando();
+		  if (comando == 0x01 || comando== 0x02 ){
+			  estado = 1;
+			  break;
+		  }
+		  else if (comando == 0x08){
+			  estado = 2;
+			  break;
+		  }
+
+
+	  }
+
+
+	  while (estado == 1){
+		  //myprintf("Estado 1\n");
+		  //HAL_GPIO_TogglePin(WDG_GPIO_Port, WDG_Pin);
+
+		  //uint8_t comando = recibir_comando();
+		  HAL_Delay(100);
+		  uart_flush_rx_polling(&LINK_UART_HANDLE);
+		  comando_recibido(comando);
+		  estado = 0;
+		  comando = 0x00;
+		  break;
+
+
+	  }
+	  while (estado == 2){
+		  //HAL_GPIO_WritePin(LED_TEST_GPIO_Port, LED_TEST_Pin,                   GPIO_PIN_SET);
+		 //HAL_GPIO_TogglePin(WDG_GPIO_Port, WDG_Pin);
+		  while(bandera == 1){
+
+			  fres = f_mount(&FatFs, "", 1); //1=mount now
+			  HAL_Delay(1000);
+			  //HAL_GPIO_TogglePin(LED_TEST_GPIO_Port, LED_TEST_Pin);
+			  //HAL_GPIO_TogglePin(WDG_GPIO_Port, WDG_Pin);
+
+			  if (fres == FR_OK) {
+				  inicia = 3;
+				  bandera = 0;
+				  break;
+			  }
+			  else {
+				  inicia = 0;
+				  myprintf("SD MALA\n");
+			  }
+		  }
+
+		  //HAL_GPIO_TogglePin(WDG_GPIO_Port, WDG_Pin);
+		  int rc = camera_init();
+		  HAL_Delay(1000);
+		  if (rc == 0) {
+			  inicia2 = 5;
+		  }
+		  else {
+			  inicia2 = 0;
+		  }
+		  //HAL_GPIO_TogglePin(WDG_GPIO_Port, WDG_Pin);
+		  //enviar_comando(fres);
+		  //comando_recibido(fres);
+
+		  inicia3 =  inicia + inicia2;
+
+		  if (inicia3 == 8){
+			  comando_recibido(0x08);
+			  inicia3 = 0;
+			  comando = 0x00;
+			  myprintf("TODO GOOD\n");
+		  }
+		  else if(inicia3 == 3){
+			  comando_recibido(0x03);
+			  inicia3 = 0;
+			  comando = 0x00;
+		  }
+		  else if(inicia3 == 5){
+			  comando_recibido(0x05);
+			  inicia3 = 0;
+			  comando = 0x00;
+		  }
+		  else{
+			  comando_recibido(0x00);
+			  inicia3 = 0;
+			  comando = 0x00;
+		  }
+
+		  estado = 0;
+		  break;
+	  }
+
 
 
   }
@@ -1389,7 +1652,7 @@ static void MX_UART5_Init(void)
 
   /* USER CODE END UART5_Init 1 */
   huart5.Instance = UART5;
-  huart5.Init.BaudRate = 2400;
+  huart5.Init.BaudRate = 9600;
   huart5.Init.WordLength = UART_WORDLENGTH_8B;
   huart5.Init.StopBits = UART_STOPBITS_1;
   huart5.Init.Parity = UART_PARITY_NONE;
